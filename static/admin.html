@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Manage documents</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+.drop{display:block;border:2px dashed var(--line);border-radius:12px;padding:32px 16px;text-align:center;
+  color:var(--muted);cursor:pointer}
+.drop.over{border-color:var(--accent);background:var(--soft)}
+.drop b{display:block;color:var(--ink);font-size:16px}
+.drop input{display:none}
+.chosen{margin:12px 0 0}
+.chip{display:inline-block;background:var(--soft);border-radius:6px;padding:2px 8px;margin:4px 4px 0 0;font-size:13px}
+.actions{display:flex;align-items:center;gap:14px;margin-top:16px}
+.note{font-size:13.5px;color:var(--muted)}
+.note.bad{color:var(--bad)}.note.good{color:var(--ok)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
+.row:first-child{border-top:0}
+.row small{color:var(--muted)}
+.login{max-width:360px;margin:60px auto}
+.login .btn{margin-top:12px;width:100%}
+[hidden]{display:none!important}
+</style></head><body>
+<nav class="nav">
+  <span class="brand">Universal RAG</span>
+  <a href="/">Ask</a>
+  <a class="on" href="/admin">Manage documents</a>
+</nav>
+<main>
+  <form class="panel login" id="login" hidden>
+    <h2>Admin sign in</h2>
+    <input type="password" id="pw" placeholder="Admin password" autocomplete="current-password">
+    <button class="btn">Sign in</button>
+    <p class="note bad" id="loginErr"></p>
+  </form>
+
+  <div id="app" hidden>
+    <h1>Manage documents</h1>
+    <p class="lead">Upload files so people can ask questions about them on the Ask page.</p>
+
+    <section class="panel">
+      <h2>Upload documents</h2>
+      <label class="drop" id="drop" tabindex="0">
+        <input type="file" id="file" multiple accept=".txt,.pdf,.docx,.doc,.csv,.xlsx,.xls,.json,.html,.htm,.md,.markdown">
+        <b>Drop files here or click to choose</b>
+        PDF, Word, Excel, CSV, JSON, HTML, Markdown and text files
+      </label>
+      <div class="chosen" id="chosen"></div>
+      <div class="actions">
+        <button class="btn" id="up" disabled>Upload and index</button>
+        <span class="note" id="upMsg"></span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Uploaded documents</h2>
+      <div id="docs"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Remove everything</h2>
+      <p class="note" style="margin-bottom:12px">Deletes all indexed documents. You will need to upload them again.</p>
+      <button class="btn ghost" id="reset">Delete all documents</button>
+    </section>
+  </div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const key=()=>sessionStorage.getItem('k')||'';
+const api=(u,o={})=>fetch(u,{...o,headers:{...(o.headers||{}),'X-Admin-Key':key()}});
+let files=[];
+
+function note(el,text,cls){el.textContent=text;el.className='note '+(cls||'')}
+
+async function loadDocs(){
+  const r=await api('/documents');
+  if(r.status===401){$('login').hidden=false;$('app').hidden=true;return false}
+  const docs=await r.json();
+  $('login').hidden=true;$('app').hidden=false;
+  const box=$('docs'); box.replaceChildren();
+  if(!docs.length){box.textContent='No documents yet. Upload one above.';box.className='note';return true}
+  box.className='';
+  docs.forEach(d=>{
+    const row=document.createElement('div');row.className='row';
+    const left=document.createElement('div');
+    const n=document.createElement('div');n.textContent=d.name;
+    const s=document.createElement('small');s.textContent=d.chunks+' chunks indexed';
+    left.append(n,s);
+    const del=document.createElement('button');del.className='btn ghost';del.textContent='Delete';
+    del.onclick=async()=>{
+      if(!confirm('Delete '+d.name+'?'))return;
+      await api('/documents/'+encodeURIComponent(d.id),{method:'DELETE'});loadDocs();
+    };
+    row.append(left,del);box.append(row);
+  });
+  return true;
+}
+
+$('login').onsubmit=async e=>{
+  e.preventDefault();
+  sessionStorage.setItem('k',$('pw').value);
+  if(await loadDocs()) return;
+  note($('loginErr'),'Wrong password. Try again.','bad');
+};
+
+const drop=$('drop');
+function addFiles(list){
+  [...list].forEach(f=>{if(!files.some(x=>x.name===f.name))files.push(f)});
+  $('chosen').replaceChildren(...files.map(f=>{const c=document.createElement('span');c.className='chip';c.textContent=f.name;return c}));
+  $('up').disabled=!files.length;
+}
+$('file').onchange=e=>addFiles(e.target.files);
+drop.ondragover=e=>{e.preventDefault();drop.classList.add('over')};
+drop.ondragleave=()=>drop.classList.remove('over');
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove('over');addFiles(e.dataTransfer.files)};
+drop.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$('file').click()}};
+
+$('up').onclick=async()=>{
+  const fd=new FormData(); files.forEach(f=>fd.append('files',f));
+  $('up').disabled=true; note($('upMsg'),'Indexing. Large files can take a few minutes.');
+  try{
+    const r=await api('/upload',{method:'POST',body:fd});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||'Upload failed');
+    let m='Indexed: '+d.ingested.join(', ');
+    if(d.skipped.length) m+='. Skipped (unsupported): '+d.skipped.join(', ');
+    note($('upMsg'),m,'good');
+    files=[];addFiles([]);loadDocs();
+  }catch(err){note($('upMsg'),err.message,'bad');$('up').disabled=!files.length}
+};
+
+$('reset').onclick=async()=>{
+  if(!confirm('Delete ALL indexed documents?'))return;
+  await api('/reset',{method:'DELETE'});loadDocs();
+};
+
+loadDocs();
+</script></body></html>

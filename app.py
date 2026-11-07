@@ -8,7 +8,8 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import List
-
+from fastapi import Depends, Header
+from fastapi.staticfiles import StaticFiles
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +18,13 @@ from pydantic import BaseModel
 from rag_pipeline import UniversalRAG, LOADERS
 
 app = FastAPI(title="Universal RAG API", version="1.0")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
+def check_admin(x_admin_key: str = Header(None)):
+    if ADMIN_PASSWORD and x_admin_key != ADMIN_PASSWORD:
+        raise HTTPException(401, detail="Admin password required")
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -47,10 +54,14 @@ class QueryRequest(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return open("static/index.html").read()
+    return open("static/index.html", encoding="utf-8").read()
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page():
+    return open("static/admin.html", encoding="utf-8").read()
 
 
-@app.post("/upload")
+@app.post("/upload", dependencies=[Depends(check_admin)])
 async def upload_files(files: List[UploadFile] = File(...)):
     """Upload one or more documents for ingestion."""
     saved = []
@@ -124,7 +135,7 @@ def status():
     }
 
 
-@app.delete("/reset")
+@app.delete("/reset", dependencies=[Depends(check_admin)])
 def reset_db():
     from rag_pipeline import get_qdrant_client, get_collection_name
     client = get_qdrant_client()
@@ -135,3 +146,25 @@ def reset_db():
         f.unlink()
     rag.client = None
     return {"status": "reset complete"}
+@app.get("/documents", dependencies=[Depends(check_admin)])
+def list_documents():
+    from rag_pipeline import get_qdrant_client
+    qc = get_qdrant_client()
+    docs = []
+    for c in qc.get_collections().collections:
+        if not c.name.startswith("doc_"):
+            continue
+        pts = qc.scroll(c.name, limit=1, with_payload=True)[0]
+        label = pts[0].payload.get("source_file", c.name) if pts else c.name
+        docs.append({"id": c.name, "name": label,
+                     "chunks": qc.get_collection(c.name).points_count})
+    return docs
+
+@app.delete("/documents/{doc_id}", dependencies=[Depends(check_admin)])
+def delete_document(doc_id: str):
+    from rag_pipeline import get_qdrant_client
+    if not doc_id.startswith("doc_"):
+        raise HTTPException(400, detail="Invalid document id")
+    get_qdrant_client().delete_collection(doc_id)
+    return {"status": "deleted"}
+  
