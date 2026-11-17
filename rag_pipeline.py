@@ -553,6 +553,8 @@ def retrieve(query: str, client, top_k: int = 8) -> List[Dict]:
 
     all_results.sort(key=lambda x: x["distance"])
     logger.info(f"Final results count: {len(all_results)}, sending top {top_k}")
+    if name_results:
+        return name_results[:top_k]
     for i, d in enumerate(all_results[:top_k]):
         logger.info(f"  Chunk {i}: {d['content'][:80]}")
     return all_results[:top_k]
@@ -588,8 +590,14 @@ Answer (be specific and direct):"""
 
     resp = requests.post(
         "http://localhost:11434/api/generate",
-        json={"model": model, "prompt": prompt, "stream": False},
-        timeout=120
+        json={
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "keep_alive": "30m",
+            "options": {"num_predict": 300, "num_ctx": 4096},
+        },
+        timeout=600,
     )
     resp.raise_for_status()
     return resp.json()["response"].strip()

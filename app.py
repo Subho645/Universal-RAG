@@ -39,7 +39,7 @@ rag = UniversalRAG(
     llm_model=os.getenv("LLM_MODEL", "llama3.2"),
     chunk_size=int(os.getenv("CHUNK_SIZE", "500")),
     chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "50")),
-    top_k=int(os.getenv("TOP_K", "8")),
+    top_k=int(os.getenv("TOP_K", "4")),
 )
 
 UPLOAD_DIR = Path("./uploaded_docs")
